@@ -15,6 +15,8 @@ var (
 	device     = kingpin.Arg("device", "CO2 Meter device, such as /dev/hidraw2").Required().String()
 	listenAddr = kingpin.Arg("listen-address", "The address to listen on for HTTP requests.").
 			Default(":8080").String()
+	encryptedMode = kingpin.Flag("encrypted", "Force encrypted protocol (older devices)").Bool()
+	plaintextMode = kingpin.Flag("plaintext", "Force plaintext protocol (newer TFA Dostmann devices)").Bool()
 )
 
 var (
@@ -42,15 +44,22 @@ func main() {
 }
 
 func measure() {
-	meter := new(meter.Meter)
-	err := meter.Open(*device)
+	m := new(meter.Meter)
+	switch {
+	case *encryptedMode:
+		m.SetMode(meter.ModeEncrypted)
+	case *plaintextMode:
+		m.SetMode(meter.ModePlaintext)
+	}
+
+	err := m.Open(*device)
 	if err != nil {
 		log.Fatalf("Could not open '%v'", *device)
 		return
 	}
 
 	for {
-		result, err := meter.Read()
+		result, err := m.Read()
 		if err != nil {
 			log.Fatalf("Something went wrong: '%v'", err)
 		}

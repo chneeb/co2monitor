@@ -21,12 +21,27 @@ const (
 	hidiocsfeature9 uintptr = 0xc0094806
 )
 
+// Protocol mode constants for use with SetMode.
+const (
+	ModeAuto      int32 = 0 // detect on first read using checksum
+	ModeEncrypted int32 = 1 // older devices: XOR-obfuscated HID reports
+	ModePlaintext int32 = 2 // newer devices: unobfuscated HID reports
+)
+
 var key = [8]byte{}
 
 // Meter gives access to the CO2 Meter. Make sure to call Open before Read.
 type Meter struct {
 	file   *os.File
 	opened int32
+	mode   int32 // ModeAuto until protocol is detected or set explicitly
+}
+
+// SetMode overrides automatic protocol detection. Use ModeEncrypted for older
+// devices and ModePlaintext for newer TFA Dostmann devices. The default,
+// ModeAuto, detects the protocol on the first read using checksum validation.
+func (m *Meter) SetMode(mode int32) {
+	atomic.StoreInt32(&m.mode, mode)
 }
 
 // Measurement is the result of a Read operation.
@@ -72,6 +87,41 @@ func (m *Meter) ioctl() error {
 	return nil
 }
 
+// validChecksum returns true if byte[3] equals the sum of bytes[0:3] mod 256,
+// which is the integrity check used by plaintext-mode devices.
+func validChecksum(data []uint) bool {
+	return (data[0]+data[1]+data[2])&0xff == data[3]
+}
+
+// decode returns the logical HID packet bytes according to the current mode.
+// In ModeAuto it detects the protocol from the checksum and caches the result.
+// Returns nil when the packet should be skipped (auto-detect, bad checksum).
+func (m *Meter) decode(raw []byte) []uint {
+	rawUint := make([]uint, 8)
+	for i, b := range raw {
+		rawUint[i] = uint(b)
+	}
+
+	switch atomic.LoadInt32(&m.mode) {
+	case ModeEncrypted:
+		return m.decrypt(raw)
+	case ModePlaintext:
+		return rawUint
+	default: // ModeAuto
+		if dec := m.decrypt(raw); validChecksum(dec) {
+			log.Printf("Device protocol detected: encrypted")
+			atomic.StoreInt32(&m.mode, ModeEncrypted)
+			return dec
+		}
+		if validChecksum(rawUint) {
+			log.Printf("Device protocol detected: plaintext")
+			atomic.StoreInt32(&m.mode, ModePlaintext)
+			return rawUint
+		}
+		return nil // unrecognised packet, skip
+	}
+}
+
 // Read will read from the device file until it finds a temperature and co2 measurement. Before it can be used the
 // device file needs to be opened via Open.
 func (m *Meter) Read() (*Measurement, error) {
@@ -79,25 +129,28 @@ func (m *Meter) Read() (*Measurement, error) {
 		return nil, errors.New("Device needs to be opened")
 	}
 
-	result := make([]byte, 8)
+	raw := make([]byte, 8)
 	measurement := &Measurement{Co2: 0, Temperature: -273.15}
 
 	for {
-		_, err := m.file.Read(result)
+		_, err := m.file.Read(raw)
 		if err != nil {
 			return nil, errors.Wrapf(err, "Could not read from: '%v'", m.file.Name())
 		}
 
-		decrypted := m.decrypt(result)
+		data := m.decode(raw)
+		if data == nil {
+			continue
+		}
 
-		operation := decrypted[0]
-		value := decrypted[1]<<8 | decrypted[2]
+		operation := data[0]
+		value := data[1]<<8 | data[2]
 
 		switch byte(operation) {
 		case meterCO2:
 			measurement.Co2 = int(value)
 		case meterTemp:
-			measurement.Temperature = math.Round((float64(value)/16.0 - 273.15) * 100.0) / 100.0
+			measurement.Temperature = math.Round((float64(value)/16.0-273.15)*100.0) / 100.0
 		}
 
 		if measurement.Co2 != 0 && measurement.Temperature != -273.15 {
