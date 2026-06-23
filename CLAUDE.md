@@ -43,3 +43,15 @@ bits set → `0xC0000000`; same size/type/number fields). FreeBSD 14+ uses the s
 | `github.com/prometheus/client_golang` | Prometheus metrics |
 | `gopkg.in/alecthomas/kingpin.v2` | CLI flags |
 | `github.com/stretchr/testify` | Test assertions |
+| `github.com/eclipse/paho.mqtt.golang` | MQTT publishing |
+
+## MQTT
+
+Optional MQTT publishing via `--mqtt-host <host:port>` and `--mqtt-topic <topic>`. Both flags must be provided together; omitting both keeps Prometheus-only behavior.
+
+Payload published on each measurement:
+```json
+{"temperature": 21.5, "co2": 843, "co2_detected": false, "linkquality": 255}
+```
+
+`co2_detected` is true when CO₂ ≥ `--mqtt-co2-threshold` (default: 1800 ppm). Connection failure at startup is fatal; mid-run disconnections auto-reconnect via paho.
