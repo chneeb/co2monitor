@@ -51,10 +51,14 @@ Optional MQTT publishing via `--mqtt-host <host:port>` and `--mqtt-topic <topic>
 
 Payload published on each measurement:
 ```json
-{"temperature": 21.5, "co2": 843, "co2_detected": false, "linkquality": 255}
+{"temperature": 21.5, "co2": 843, "co2_detected": false, "linkquality": 255, "timestamp": 1719187200}
 ```
 
-`co2_detected` is true when CO₂ ≥ `--mqtt-co2-threshold` (default: 1800 ppm). Connection failure at startup is fatal; mid-run disconnections auto-reconnect via paho.
+- `co2_detected` is true when CO₂ ≥ `--mqtt-co2-threshold` (default: 1800 ppm)
+- `timestamp` is a Unix timestamp (seconds) of when the measurement was published
+- `--mqtt-interval` controls the minimum time between publishes (default: `1m`); first measurement always publishes immediately
+- Connection failure at startup is fatal; mid-run disconnections auto-reconnect via paho
+- Each instance uses a unique client ID derived from hostname and device name (e.g. `co2monitor-raspberrypi-hidraw2`) to avoid broker conflicts when running multiple instances on the same or different hosts
 
 ## systemd (Debian)
 

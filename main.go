@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
+	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/larsp/co2monitor/meter"
@@ -23,6 +26,7 @@ var (
 	mqttHost       = kingpin.Flag("mqtt-host", "MQTT broker host (e.g. localhost:1883); omit to disable MQTT").String()
 	mqttTopic      = kingpin.Flag("mqtt-topic", "MQTT topic to publish measurements to").String()
 	mqttThreshold  = kingpin.Flag("mqtt-co2-threshold", "CO2 ppm threshold above which co2_detected is true").Default("1800").Int()
+	mqttInterval   = kingpin.Flag("mqtt-interval", "Minimum interval between MQTT publishes").Default("1m").Duration()
 )
 
 var (
@@ -46,18 +50,24 @@ type mqttPayload struct {
 	Co2         int     `json:"co2"`
 	Co2Detected bool    `json:"co2_detected"`
 	LinkQuality int     `json:"linkquality"`
+	Timestamp   int64   `json:"timestamp"`
 }
 
-func newMQTTClient(host string) mqtt.Client {
+func newMQTTClient(host, device string) mqtt.Client {
+	hostname, err := os.Hostname()
+	if err != nil {
+		log.Fatalf("Could not determine hostname: %v", err)
+	}
+	clientID := fmt.Sprintf("co2monitor-%s-%s", hostname, filepath.Base(device))
 	opts := mqtt.NewClientOptions().
 		AddBroker(fmt.Sprintf("tcp://%s", host)).
-		SetClientID("co2monitor").
+		SetClientID(clientID).
 		SetAutoReconnect(true)
 	client := mqtt.NewClient(opts)
 	if tok := client.Connect(); tok.Wait() && tok.Error() != nil {
 		log.Fatalf("MQTT connect failed: %v", tok.Error())
 	}
-	log.Printf("Connected to MQTT broker at %v", host)
+	log.Printf("Connected to MQTT broker at %v (clientID: %v)", host, clientID)
 	return client
 }
 
@@ -67,7 +77,7 @@ func main() {
 
 	var mqttClient mqtt.Client
 	if *mqttHost != "" && *mqttTopic != "" {
-		mqttClient = newMQTTClient(*mqttHost)
+		mqttClient = newMQTTClient(*mqttHost, *device)
 	} else if *mqttHost != "" || *mqttTopic != "" {
 		log.Fatal("Both --mqtt-host and --mqtt-topic must be set to enable MQTT")
 	}
@@ -92,6 +102,7 @@ func measure(mqttClient mqtt.Client) {
 		return
 	}
 
+	var lastPublish time.Time
 	for {
 		result, err := m.Read()
 		if err != nil {
@@ -100,12 +111,13 @@ func measure(mqttClient mqtt.Client) {
 		temperature.Set(result.Temperature)
 		co2.Set(float64(result.Co2))
 
-		if mqttClient != nil {
+		if mqttClient != nil && time.Since(lastPublish) >= *mqttInterval {
 			payload := mqttPayload{
 				Temperature: result.Temperature,
 				Co2:         result.Co2,
 				Co2Detected: result.Co2 >= *mqttThreshold,
 				LinkQuality: 255,
+				Timestamp:   time.Now().Unix(),
 			}
 			data, err := json.Marshal(payload)
 			if err != nil {
@@ -113,6 +125,7 @@ func measure(mqttClient mqtt.Client) {
 				continue
 			}
 			mqttClient.Publish(*mqttTopic, 0, false, data)
+			lastPublish = time.Now()
 		}
 	}
 }
