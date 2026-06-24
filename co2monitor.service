@@ -1,0 +1,16 @@
+[Unit]
+Description=CO2 Monitor Prometheus Exporter
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+EnvironmentFile=/etc/default/co2monitor
+ExecStart=/usr/local/bin/co2monitor $DEVICE $LISTEN_ADDR $EXTRA_FLAGS
+Restart=on-failure
+RestartSec=5
+User=co2monitor
+Group=co2monitor
+SupplementaryGroups=input
+
+[Install]
+WantedBy=multi-user.target

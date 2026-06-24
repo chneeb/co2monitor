@@ -55,3 +55,41 @@ Payload published on each measurement:
 ```
 
 `co2_detected` is true when CO₂ ≥ `--mqtt-co2-threshold` (default: 1800 ppm). Connection failure at startup is fatal; mid-run disconnections auto-reconnect via paho.
+
+## systemd (Debian)
+
+A `co2monitor.service` unit file is included. Install and enable:
+
+```sh
+go build -o co2monitor . && sudo cp co2monitor /usr/local/bin/
+sudo useradd --system --no-create-home --shell /usr/sbin/nologin co2monitor
+sudo cp co2monitor.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now co2monitor
+```
+
+Two configuration options are documented in the unit file:
+
+**Option A — environment file** (default): copy `co2monitor.env` to `/etc/co2monitor/config` and edit it there. Keeps the unit file untouched.
+
+```sh
+sudo mkdir /etc/co2monitor
+sudo cp co2monitor.env /etc/co2monitor/config
+```
+
+**Option B — inline**: comment out the `EnvironmentFile` and `$VAR`-based `ExecStart`, uncomment the direct line:
+
+```ini
+ExecStart=/usr/local/bin/co2monitor /dev/hidraw2 :8080 --mqtt-host raspberrypi:1883 --mqtt-topic sensors/co2
+```
+
+After any change to the unit file: `sudo systemctl daemon-reload && sudo systemctl restart co2monitor`.
+
+HID device access requires the `co2monitor` user to be in the `input` group (`SupplementaryGroups=input` in the unit file) and a udev rule:
+
+```
+# /etc/udev/rules.d/99-co2monitor.rules
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="04d9", MODE="0660", GROUP="input"
+```
+
+Reload udev with `sudo udevadm control --reload-rules && sudo udevadm trigger`.
